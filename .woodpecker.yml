@@ -1,0 +1,20 @@
+when:
+  event: [push, pull_request, manual]
+
+steps:
+  build-arm64:
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      registry: docker-private.mleitz1.com
+      repo: docker-private.mleitz1.com/forks/traefik-forward-auth
+      dockerfile: Dockerfile.arm64
+      platforms: linux/arm64
+      tags:
+        - leitz-arm64
+        - leitz-arm64-${CI_COMMIT_SHA:0:8}
+      logins:
+        - registry: docker-private.mleitz1.com
+          username:
+            from_secret: nexus_woodpecker_username
+          password:
+            from_secret: nexus_woodpecker_password
