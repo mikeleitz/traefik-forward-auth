@@ -66,7 +66,12 @@ func (o *OIDC) GetLoginURL(redirectURI, state string) string {
 
 // ExchangeCode exchanges the given redirect uri and code for a token
 func (o *OIDC) ExchangeCode(redirectURI, code string) (string, error) {
-	token, err := o.OAuthExchangeCode(redirectURI, code)
+	return o.ExchangeCodeWithPKCE(redirectURI, code, "")
+}
+
+// ExchangeCodeWithPKCE exchanges the given redirect uri and code for a token using PKCE
+func (o *OIDC) ExchangeCodeWithPKCE(redirectURI, code, codeVerifier string) (string, error) {
+	token, err := o.OAuthExchangeCodeWithPKCE(redirectURI, code, codeVerifier)
 	if err != nil {
 		return "", err
 	}

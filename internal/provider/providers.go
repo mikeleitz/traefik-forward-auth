@@ -19,6 +19,7 @@ type Provider interface {
 	Name() string
 	GetLoginURL(redirectURI, state string) string
 	ExchangeCode(redirectURI, code string) (string, error)
+	ExchangeCodeWithPKCE(redirectURI, code, codeVerifier string) (string, error)
 	GetUser(token string) (User, error)
 	Setup() error
 }
@@ -62,5 +63,14 @@ func (p *OAuthProvider) OAuthGetLoginURL(redirectURI, state string) string {
 // OAuthExchangeCode provides a base "ExchangeCode" for proiders using OAauth2
 func (p *OAuthProvider) OAuthExchangeCode(redirectURI, code string) (*oauth2.Token, error) {
 	config := p.ConfigCopy(redirectURI)
+	return config.Exchange(p.ctx, code)
+}
+
+// OAuthExchangeCodeWithPKCE provides a base "ExchangeCodeWithPKCE" for providers using OAuth2 with PKCE
+func (p *OAuthProvider) OAuthExchangeCodeWithPKCE(redirectURI, code, codeVerifier string) (*oauth2.Token, error) {
+	config := p.ConfigCopy(redirectURI)
+	if codeVerifier != "" {
+		return config.Exchange(p.ctx, code, oauth2.SetAuthURLParam("code_verifier", codeVerifier))
+	}
 	return config.Exchange(p.ctx, code)
 }

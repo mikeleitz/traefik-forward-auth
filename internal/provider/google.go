@@ -71,6 +71,11 @@ func (g *Google) GetLoginURL(redirectURI, state string) string {
 	return u.String()
 }
 
+// ExchangeCodeWithPKCE exchanges the given redirect uri and code for a token (Google does not use PKCE)
+func (g *Google) ExchangeCodeWithPKCE(redirectURI, code, codeVerifier string) (string, error) {
+	return g.ExchangeCode(redirectURI, code)
+}
+
 // ExchangeCode exchanges the given redirect uri and code for a token
 func (g *Google) ExchangeCode(redirectURI, code string) (string, error) {
 	form := url.Values{}

@@ -3,6 +3,7 @@ package tfa
 import (
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/thomseddon/traefik-forward-auth/internal/provider"
@@ -125,76 +126,115 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		// Logging setup
 		logger := s.logger(r, "AuthCallback", "default", "Handling callback")
 
-		// Check state
 		state := r.URL.Query().Get("state")
-		if err := ValidateState(state); err != nil {
+		code := r.URL.Query().Get("code")
+
+		// Try the normal forward-auth CSRF flow first.
+		// FindCSRFCookie requires state to be at least 6 chars (used as cookie name suffix).
+		var c *http.Cookie
+		var csrfErr error
+		if len(state) >= 6 {
+			c, csrfErr = FindCSRFCookie(r, state)
+		} else {
+			csrfErr = http.ErrNoCookie
+		}
+		if csrfErr == nil {
+			// Normal flow: forward-auth initiated the OAuth request
+			if err := ValidateState(state); err != nil {
+				logger.WithFields(logrus.Fields{
+					"error": err,
+				}).Warn("Error validating state")
+				http.Error(w, "Not authorized", 401)
+				return
+			}
+
+			valid, providerName, redirect, err := ValidateCSRFCookie(c, state)
+			if !valid {
+				logger.WithFields(logrus.Fields{
+					"error":       err,
+					"csrf_cookie": c,
+				}).Warn("Error validating csrf cookie")
+				http.Error(w, "Not authorized", 401)
+				return
+			}
+
+			p, err := config.GetConfiguredProvider(providerName)
+			if err != nil {
+				logger.WithFields(logrus.Fields{
+					"error":       err,
+					"csrf_cookie": c,
+					"provider":    providerName,
+				}).Warn("Invalid provider in csrf cookie")
+				http.Error(w, "Not authorized", 401)
+				return
+			}
+
+			http.SetCookie(w, ClearCSRFCookie(r, c))
+
+			token, err := p.ExchangeCode(redirectUri(r), code)
+			if err != nil {
+				logger.WithField("error", err).Error("Code exchange failed with provider")
+				http.Error(w, "Service unavailable", 503)
+				return
+			}
+
+			user, err := p.GetUser(token)
+			if err != nil {
+				logger.WithField("error", err).Error("Error getting user")
+				http.Error(w, "Service unavailable", 503)
+				return
+			}
+
+			http.SetCookie(w, MakeCookie(r, user.Email))
 			logger.WithFields(logrus.Fields{
-				"error": err,
-			}).Warn("Error validating state")
-			http.Error(w, "Not authorized", 401)
+				"provider": providerName,
+				"redirect": redirect,
+				"user":     user.Email,
+			}).Info("Successfully generated auth cookie, redirecting user.")
+			http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
 			return
 		}
 
-		// Check for CSRF cookie
-		c, err := FindCSRFCookie(r, state)
-		if err != nil {
+		// No CSRF cookie found — check for bridge-initiated PKCE flow.
+		// The magic-link bridge encodes the PKCE code_verifier in the state as:
+		//   {code_verifier}:{session_data}
+		// When the bridge initiates auth, forward-auth has no CSRF cookie for the
+		// callback. We detect this by the presence of a ':' in state and a non-empty code.
+		colonIdx := strings.Index(state, ":")
+		if code == "" || colonIdx <= 0 {
 			logger.Info("Missing csrf cookie")
 			http.Error(w, "Not authorized", 401)
 			return
 		}
 
-		// Validate CSRF cookie against state
-		valid, providerName, redirect, err := ValidateCSRFCookie(c, state)
-		if !valid {
-			logger.WithFields(logrus.Fields{
-				"error":       err,
-				"csrf_cookie": c,
-			}).Warn("Error validating csrf cookie")
+		// Bootstrap mode: extract code_verifier from state and exchange with PKCE
+		codeVerifier := state[:colonIdx]
+		logger.Info("Bootstrap: bridge-initiated PKCE flow, exchanging code with verifier")
+
+		p, err := config.GetConfiguredProvider(config.DefaultProvider)
+		if err != nil {
+			logger.WithField("error", err).Warn("Bootstrap: invalid default provider")
 			http.Error(w, "Not authorized", 401)
 			return
 		}
 
-		// Get provider
-		p, err := config.GetConfiguredProvider(providerName)
+		token, err := p.ExchangeCodeWithPKCE(redirectUri(r), code, codeVerifier)
 		if err != nil {
-			logger.WithFields(logrus.Fields{
-				"error":       err,
-				"csrf_cookie": c,
-				"provider":    providerName,
-			}).Warn("Invalid provider in csrf cookie")
-			http.Error(w, "Not authorized", 401)
-			return
-		}
-
-		// Clear CSRF cookie
-		http.SetCookie(w, ClearCSRFCookie(r, c))
-
-		// Exchange code for token
-		token, err := p.ExchangeCode(redirectUri(r), r.URL.Query().Get("code"))
-		if err != nil {
-			logger.WithField("error", err).Error("Code exchange failed with provider")
+			logger.WithField("error", err).Error("Bootstrap: code exchange failed")
 			http.Error(w, "Service unavailable", 503)
 			return
 		}
 
-		// Get user
 		user, err := p.GetUser(token)
 		if err != nil {
-			logger.WithField("error", err).Error("Error getting user")
+			logger.WithField("error", err).Error("Bootstrap: error getting user")
 			http.Error(w, "Service unavailable", 503)
 			return
 		}
 
-		// Generate cookie
 		http.SetCookie(w, MakeCookie(r, user.Email))
-		logger.WithFields(logrus.Fields{
-			"provider": providerName,
-			"redirect": redirect,
-			"user":     user.Email,
-		}).Info("Successfully generated auth cookie, redirecting user.")
-
-		// Redirect
-		http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+		logger.WithField("user", user.Email).Info("Bootstrap: successfully generated auth cookie, redirecting user.")
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 	}
 }
 
