@@ -11,6 +11,7 @@ steps:
       platforms: linux/arm64
       tags:
         - leitz-arm64
+        - leitz-baseline-arm64
         - leitz-arm64-${CI_COMMIT_SHA:0:8}
       logins:
         - registry: docker-private.mleitz1.com
