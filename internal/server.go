@@ -169,7 +169,13 @@ func (s *Server) authDeny(logger *logrus.Entry, w http.ResponseWriter, r *http.R
 	logger.Debug("Denying unauthenticated request with 401")
 	body := unauthorizedBody()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	// Strong anti-cache: browsers must not reuse an old authenticated shell.
+	// Clear-Site-Data asks supporting browsers to drop HTTP cache for this origin
+	// when the session is gone (helps after a prior logged-in visit).
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Clear-Site-Data", `"cache", "storage"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusUnauthorized)
 	_, _ = w.Write(body)

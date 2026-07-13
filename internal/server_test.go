@@ -128,6 +128,8 @@ func TestServerAuthHandlerUnauthorizedAction(t *testing.T) {
 	assert.Equal("", res.Header.Get("Location"), "must not redirect to OIDC")
 	assert.Contains(res.Header.Get("Content-Type"), "text/html")
 	assert.Contains(body, "Access denied")
+	assert.Contains(res.Header.Get("Cache-Control"), "no-store")
+	assert.Contains(res.Header.Get("Clear-Site-Data"), "cache")
 
 	// Expired cookie also denies instead of re-starting OIDC
 	req = newDefaultHttpRequest("/foo")
