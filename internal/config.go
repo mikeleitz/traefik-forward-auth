@@ -37,9 +37,18 @@ type Config struct {
 	LogoutRedirect         string               `long:"logout-redirect" env:"LOGOUT_REDIRECT" description:"URL to redirect to following logout"`
 	MatchWhitelistOrDomain bool                 `long:"match-whitelist-or-domain" env:"MATCH_WHITELIST_OR_DOMAIN" description:"Allow users that match *either* whitelist or domain (enabled by default in v3)"`
 	Path                   string               `long:"url-path" env:"URL_PATH" default:"/_oauth" description:"Callback URL Path"`
-	SecretString           string               `long:"secret" env:"SECRET" description:"Secret used for signing (required)" json:"-"`
-	Whitelist              CommaSeparatedList   `long:"whitelist" env:"WHITELIST" env-delim:"," description:"Only allow given email addresses, can be set multiple times"`
-	Port                   int                  `long:"port" env:"PORT" default:"4181" description:"Port to listen on"`
+	// UnauthenticatedAction controls what happens when AuthHandler has no valid session.
+	// "redirect" (default): start OIDC login (legacy traefik-forward-auth behavior).
+	// "unauthorized": return HTTP 401 with an access-denied body and do not start OIDC.
+	// Use "unauthorized" for magic-link-only flows where login is initiated externally
+	// (SSH → bridge → Hydra → /_oauth) and direct visitors should not hit the IdP.
+	UnauthenticatedAction string `long:"unauthenticated-action" env:"UNAUTHENTICATED_ACTION" default:"redirect" choice:"redirect" choice:"unauthorized" description:"Action when no valid session: redirect to OIDC, or return 401"`
+	// UnauthorizedPage is an optional path to an HTML file served on 401 when
+	// UnauthenticatedAction is "unauthorized". If empty, a built-in page is used.
+	UnauthorizedPage string             `long:"unauthorized-page" env:"UNAUTHORIZED_PAGE" description:"Path to HTML file returned for 401 (unauthenticated-action=unauthorized)"`
+	SecretString     string             `long:"secret" env:"SECRET" description:"Secret used for signing (required)" json:"-"`
+	Whitelist        CommaSeparatedList `long:"whitelist" env:"WHITELIST" env-delim:"," description:"Only allow given email addresses, can be set multiple times"`
+	Port             int                `long:"port" env:"PORT" default:"4181" description:"Port to listen on"`
 
 	Providers provider.Providers `group:"providers" namespace:"providers" env-namespace:"PROVIDERS"`
 	Rules     map[string]*Rule   `long:"rule.<name>.<param>" description:"Rule definitions, param can be: \"action\", \"rule\" or \"provider\""`

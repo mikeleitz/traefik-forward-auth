@@ -4,6 +4,28 @@
 
 A minimal forward authentication service that provides OAuth/SSO login and authentication for the [traefik](https://github.com/containous/traefik) reverse proxy/load balancer.
 
+## Leitz fork notes
+
+This fork adds:
+
+1. **Bootstrap PKCE mode** on `/_oauth` for bridge-initiated OAuth (magic-link SSO): when no CSRF cookie is present but `state` contains `code_verifier:…` and `code` is set, the code is exchanged with PKCE and a session cookie is issued.
+2. **`UNAUTHENTICATED_ACTION`** (`redirect` | `unauthorized`, default `redirect`):
+   - `redirect` — legacy behavior: start OIDC login (307) when there is no valid session.
+   - `unauthorized` — return **HTTP 401** with an HTML access-denied body and **do not** start OIDC. Use this for magic-link-only apps so CSS/JS asset requests do not hit the IdP.
+3. **`UNAUTHORIZED_PAGE`** — optional path to a custom HTML file used for 401 responses when `unauthenticated-action=unauthorized`. If unset or unreadable, a small built-in page is served.
+
+Example (member launcher):
+
+```yaml
+environment:
+  - UNAUTHENTICATED_ACTION=unauthorized
+  - UNAUTHORIZED_PAGE=/unauthorized.html
+volumes:
+  - ./static/access-denied.html:/unauthorized.html:ro
+```
+
+Ensure Traefik `forwardauth.maxResponseBodySize` is large enough for your HTML (e.g. `32768`).
+
 ## Why?
 
 - Seamlessly overlays any http service with a single endpoint (see: `url-path` in [Configuration](#configuration))

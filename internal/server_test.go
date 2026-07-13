@@ -114,6 +114,33 @@ func TestServerAuthHandlerInvalid(t *testing.T) {
 	assert.Equal(401, res.StatusCode, "invalid email should not be authorised")
 }
 
+func TestServerAuthHandlerUnauthorizedAction(t *testing.T) {
+	assert := assert.New(t)
+	config = newDefaultConfig()
+	config.UnauthenticatedAction = "unauthorized"
+	ResetUnauthorizedPageCache()
+	log, _ = test.NewNullLogger()
+
+	// No cookie → 401 with HTML body, not OIDC redirect
+	req := newDefaultHttpRequest("/assets/styles.css")
+	res, body := doHttpRequest(req, nil)
+	assert.Equal(401, res.StatusCode, "unauthenticated should be 401 when action=unauthorized")
+	assert.Equal("", res.Header.Get("Location"), "must not redirect to OIDC")
+	assert.Contains(res.Header.Get("Content-Type"), "text/html")
+	assert.Contains(body, "Access denied")
+
+	// Expired cookie also denies instead of re-starting OIDC
+	req = newDefaultHttpRequest("/foo")
+	oldLifetime := config.Lifetime
+	config.Lifetime = -time.Hour
+	c := MakeCookie(req, "test@example.com")
+	config.Lifetime = oldLifetime
+
+	res, _ = doHttpRequest(req, c)
+	assert.Equal(401, res.StatusCode, "expired cookie should be 401 when action=unauthorized")
+	assert.Equal("", res.Header.Get("Location"))
+}
+
 func TestServerAuthHandlerExpired(t *testing.T) {
 	assert := assert.New(t)
 	config = newDefaultConfig()

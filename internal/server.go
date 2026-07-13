@@ -1,13 +1,46 @@
 package tfa
 
 import (
+	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 	"github.com/thomseddon/traefik-forward-auth/internal/provider"
 	muxhttp "github.com/traefik/traefik/v2/pkg/muxer/http"
+)
+
+// defaultUnauthorizedHTML is returned when UnauthenticatedAction is "unauthorized"
+// and no UnauthorizedPage file is configured.
+const defaultUnauthorizedHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access Denied</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #111; color: #eee;
+           display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
+    main { max-width: 28rem; padding: 2rem; text-align: center; }
+    h1 { font-size: 1.5rem; margin: 0 0 0.75rem; }
+    p { color: #aaa; line-height: 1.5; margin: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Access denied</h1>
+    <p>You need a valid member session to view this page.</p>
+  </main>
+</body>
+</html>
+`
+
+var (
+	unauthorizedPageOnce sync.Once
+	unauthorizedPageBody []byte
 )
 
 // Server contains muxer and handler methods
@@ -88,7 +121,7 @@ func (s *Server) AuthHandler(providerName, rule string) http.HandlerFunc {
 		// Get auth cookie
 		c, err := r.Cookie(config.CookieName)
 		if err != nil {
-			s.authRedirect(logger, w, r, p)
+			s.authUnauthenticated(logger, w, r, p)
 			return
 		}
 
@@ -97,10 +130,10 @@ func (s *Server) AuthHandler(providerName, rule string) http.HandlerFunc {
 		if err != nil {
 			if err.Error() == "Cookie has expired" {
 				logger.Info("Cookie has expired")
-				s.authRedirect(logger, w, r, p)
+				s.authUnauthenticated(logger, w, r, p)
 			} else {
 				logger.WithField("error", err).Warn("Invalid cookie")
-				http.Error(w, "Not authorized", 401)
+				s.authDeny(logger, w, r)
 			}
 			return
 		}
@@ -109,7 +142,7 @@ func (s *Server) AuthHandler(providerName, rule string) http.HandlerFunc {
 		valid := ValidateEmail(email, rule)
 		if !valid {
 			logger.WithField("email", email).Warn("Invalid email")
-			http.Error(w, "Not authorized", 401)
+			s.authDeny(logger, w, r)
 			return
 		}
 
@@ -118,6 +151,46 @@ func (s *Server) AuthHandler(providerName, rule string) http.HandlerFunc {
 		w.Header().Set("X-Forwarded-User", email)
 		w.WriteHeader(200)
 	}
+}
+
+// authUnauthenticated handles missing or expired sessions according to config.
+func (s *Server) authUnauthenticated(logger *logrus.Entry, w http.ResponseWriter, r *http.Request, p provider.Provider) {
+	if config.UnauthenticatedAction == "unauthorized" {
+		s.authDeny(logger, w, r)
+		return
+	}
+	s.authRedirect(logger, w, r, p)
+}
+
+// authDeny returns HTTP 401 with an HTML access-denied body.
+// Traefik ForwardAuth returns this response to the browser as-is (no backend hop),
+// so Homer assets are never loaded for unauthenticated requests.
+func (s *Server) authDeny(logger *logrus.Entry, w http.ResponseWriter, r *http.Request) {
+	logger.Debug("Denying unauthenticated request with 401")
+	body := unauthorizedBody()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write(body)
+}
+
+func unauthorizedBody() []byte {
+	unauthorizedPageOnce.Do(func() {
+		if config != nil && config.UnauthorizedPage != "" {
+			if data, err := ioutil.ReadFile(config.UnauthorizedPage); err == nil && len(data) > 0 {
+				unauthorizedPageBody = data
+				return
+			}
+			// Fall through to default if file is missing/unreadable; log if possible.
+			if _, err := os.Stat(config.UnauthorizedPage); err != nil {
+				log.WithField("path", config.UnauthorizedPage).WithField("error", err).
+					Warn("unauthorized-page not readable; using built-in access denied HTML")
+			}
+		}
+		unauthorizedPageBody = []byte(defaultUnauthorizedHTML)
+	})
+	return unauthorizedPageBody
 }
 
 // AuthCallbackHandler Handles auth callback request
@@ -282,6 +355,12 @@ func (s *Server) authRedirect(logger *logrus.Entry, w http.ResponseWriter, r *ht
 		"csrf_cookie": csrf,
 		"login_url":   loginURL,
 	}).Debug("Set CSRF cookie and redirected to provider login url")
+}
+
+// ResetUnauthorizedPageCache is used by tests when swapping UnauthorizedPage config.
+func ResetUnauthorizedPageCache() {
+	unauthorizedPageOnce = sync.Once{}
+	unauthorizedPageBody = nil
 }
 
 func (s *Server) logger(r *http.Request, handler, rule, msg string) *logrus.Entry {
